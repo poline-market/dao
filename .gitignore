@@ -1,0 +1,13 @@
+# Dependencies
+/lib/
+
+# Build
+/out/
+/cache/
+
+# Node
+node_modules/
+
+# Environment
+.env
+.env.local
