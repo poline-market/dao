@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./interfaces/IStakingManager.sol";
+import "./CircleRegistry.sol";
 
 /**
  * @title OracleVoting
@@ -13,12 +14,15 @@ import "./interfaces/IStakingManager.sol";
  *      - Consensus-based resolution
  *      - Automatic slashing of minority voters
  *      - Deadline-based resolution
+ *      - Permissioned by Oracle Circle membership
  */
 contract OracleVoting is AccessControl, ReentrancyGuard {
-    bytes32 public constant EVENT_CREATOR_ROLE = keccak256("EVENT_CREATOR_ROLE");
+    bytes32 public constant EVENT_CREATOR_ROLE =
+        keccak256("EVENT_CREATOR_ROLE");
     bytes32 public constant RESOLVER_ROLE = keccak256("RESOLVER_ROLE");
 
     IStakingManager public immutable stakingManager;
+    CircleRegistry public immutable circleRegistry;
 
     /// @notice Slashing percentage for wrong votes (in basis points, 10000 = 100%)
     uint256 public slashPercentage = 1000; // 10% default
@@ -42,17 +46,17 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
         string description;
         uint256 createdAt;
         uint256 votingDeadline;
-        uint256 yesVotes;       // Stake-weighted YES votes
-        uint256 noVotes;        // Stake-weighted NO votes
+        uint256 yesVotes; // Stake-weighted YES votes
+        uint256 noVotes; // Stake-weighted NO votes
         EventStatus status;
-        bool outcome;           // true = YES, false = NO
+        bool outcome; // true = YES, false = NO
         address creator;
     }
 
     struct Vote {
         bool hasVoted;
-        bool vote;              // true = YES, false = NO
-        uint256 weight;         // Voting weight at time of vote
+        bool vote; // true = YES, false = NO
+        uint256 weight; // Voting weight at time of vote
     }
 
     /// @notice Event ID => Event data
@@ -68,13 +72,35 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
     bytes32[] public allEventIds;
 
     // Events
-    event EventCreated(bytes32 indexed eventId, string description, uint256 votingDeadline);
-    event VoteCast(bytes32 indexed eventId, address indexed voter, bool vote, uint256 weight);
-    event EventResolved(bytes32 indexed eventId, bool outcome, uint256 yesVotes, uint256 noVotes);
-    event VoterSlashed(bytes32 indexed eventId, address indexed voter, uint256 amount);
+    event EventCreated(
+        bytes32 indexed eventId,
+        string description,
+        uint256 votingDeadline
+    );
+    event VoteCast(
+        bytes32 indexed eventId,
+        address indexed voter,
+        bool vote,
+        uint256 weight
+    );
+    event EventResolved(
+        bytes32 indexed eventId,
+        bool outcome,
+        uint256 yesVotes,
+        uint256 noVotes
+    );
+    event VoterSlashed(
+        bytes32 indexed eventId,
+        address indexed voter,
+        uint256 amount
+    );
     event EventDisputed(bytes32 indexed eventId, address indexed disputer);
     event EventCancelled(bytes32 indexed eventId);
-    event ParametersUpdated(uint256 slashPct, uint256 minPeriod, uint256 quorumPct);
+    event ParametersUpdated(
+        uint256 slashPct,
+        uint256 minPeriod,
+        uint256 quorumPct
+    );
 
     // Errors
     error EventAlreadyExists(bytes32 eventId);
@@ -87,30 +113,47 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
     error NotOracle(address account);
     error QuorumNotReached(uint256 required, uint256 actual);
     error VotingStillActive(bytes32 eventId, uint256 deadline);
+    error InvalidCircleScope(bytes32 circleId);
 
-    constructor(address _stakingManager, address admin) {
+    constructor(
+        address _stakingManager,
+        address _circleRegistry,
+        address admin
+    ) {
         stakingManager = IStakingManager(_stakingManager);
+        circleRegistry = CircleRegistry(_circleRegistry);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(EVENT_CREATOR_ROLE, admin);
+        _grantRole(RESOLVER_ROLE, admin);
         _grantRole(RESOLVER_ROLE, admin);
     }
 
     /**
-     * @notice Create a new event to be resolved
+     * @notice Create a new oracle event (requires Oracle Circle membership)
+     * @param circleId The Oracle circle ID
      * @param description Event description
      * @param votingPeriod Time window for voting (seconds)
      * @return eventId The new event ID
      */
     function createEvent(
+        bytes32 circleId,
         string calldata description,
         uint256 votingPeriod
-    ) external onlyRole(EVENT_CREATOR_ROLE) returns (bytes32 eventId) {
+    ) external returns (bytes32 eventId) {
+        // Must be member of the Oracle circle with SCOPE_ORACLE
+        if (!circleRegistry.isMember(circleId, msg.sender)) {
+            revert NotOracle(msg.sender);
+        }
+        if (!circleRegistry.hasScope(circleId, circleRegistry.SCOPE_ORACLE())) {
+            revert InvalidCircleScope(circleId);
+        }
         if (votingPeriod < minimumVotingPeriod) {
             revert VotingPeriodTooShort(votingPeriod, minimumVotingPeriod);
         }
 
-        eventId = keccak256(abi.encodePacked(description, block.timestamp, msg.sender));
-        
+        eventId = keccak256(
+            abi.encodePacked(description, block.timestamp, msg.sender)
+        );
+
         if (events[eventId].createdAt != 0) {
             revert EventAlreadyExists(eventId);
         }
@@ -141,7 +184,7 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
      */
     function castVote(bytes32 eventId, bool vote) external nonReentrant {
         OracleEvent storage evt = events[eventId];
-        
+
         if (evt.createdAt == 0) revert EventNotFound(eventId);
         if (evt.status != EventStatus.Voting) {
             revert InvalidStatus(evt.status, EventStatus.Voting);
@@ -182,9 +225,11 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
      * @notice Resolve an event after voting ends
      * @param eventId Event to resolve
      */
-    function resolveEvent(bytes32 eventId) external onlyRole(RESOLVER_ROLE) nonReentrant {
+    function resolveEvent(
+        bytes32 eventId
+    ) external onlyRole(RESOLVER_ROLE) nonReentrant {
         OracleEvent storage evt = events[eventId];
-        
+
         if (evt.createdAt == 0) revert EventNotFound(eventId);
         if (evt.status != EventStatus.Voting) {
             revert InvalidStatus(evt.status, EventStatus.Voting);
@@ -197,7 +242,7 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
         uint256 totalVotes = evt.yesVotes + evt.noVotes;
         uint256 totalStaked = stakingManager.totalStaked();
         uint256 requiredQuorum = (totalStaked * quorumPercentage) / 10000;
-        
+
         if (totalVotes < requiredQuorum) {
             revert QuorumNotReached(requiredQuorum, totalVotes);
         }
@@ -218,15 +263,19 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
      */
     function _slashMinorityVoters(bytes32 eventId, bool winningVote) internal {
         address[] storage voters = eventVoters[eventId];
-        
+
         for (uint256 i = 0; i < voters.length; i++) {
             address voter = voters[i];
             Vote storage v = votes[eventId][voter];
-            
+
             if (v.vote != winningVote) {
                 uint256 slashAmount = (v.weight * slashPercentage) / 10000;
                 if (slashAmount > 0) {
-                    stakingManager.slashStake(voter, slashAmount, "Voted against consensus");
+                    stakingManager.slashStake(
+                        voter,
+                        slashAmount,
+                        "Voted against consensus"
+                    );
                     emit VoterSlashed(eventId, voter, slashAmount);
                 }
             }
@@ -237,10 +286,12 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
      * @notice Mark event as disputed (called by DisputeResolution)
      * @param eventId Event to dispute
      */
-    function markDisputed(bytes32 eventId) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function markDisputed(
+        bytes32 eventId
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         OracleEvent storage evt = events[eventId];
         if (evt.createdAt == 0) revert EventNotFound(eventId);
-        
+
         evt.status = EventStatus.Disputed;
         emit EventDisputed(eventId, msg.sender);
     }
@@ -249,10 +300,12 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
      * @notice Cancel an event
      * @param eventId Event to cancel
      */
-    function cancelEvent(bytes32 eventId) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function cancelEvent(
+        bytes32 eventId
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         OracleEvent storage evt = events[eventId];
         if (evt.createdAt == 0) revert EventNotFound(eventId);
-        
+
         evt.status = EventStatus.Cancelled;
         emit EventCancelled(eventId);
     }
@@ -273,7 +326,9 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
 
     // ============ View Functions ============
 
-    function getEvent(bytes32 eventId) external view returns (OracleEvent memory) {
+    function getEvent(
+        bytes32 eventId
+    ) external view returns (OracleEvent memory) {
         return events[eventId];
     }
 
@@ -281,15 +336,23 @@ contract OracleVoting is AccessControl, ReentrancyGuard {
         return allEventIds.length;
     }
 
-    function getVoters(bytes32 eventId) external view returns (address[] memory) {
+    function getVoters(
+        bytes32 eventId
+    ) external view returns (address[] memory) {
         return eventVoters[eventId];
     }
 
-    function getVote(bytes32 eventId, address voter) external view returns (Vote memory) {
+    function getVote(
+        bytes32 eventId,
+        address voter
+    ) external view returns (Vote memory) {
         return votes[eventId][voter];
     }
 
-    function hasVoted(bytes32 eventId, address voter) external view returns (bool) {
+    function hasVoted(
+        bytes32 eventId,
+        address voter
+    ) external view returns (bool) {
         return votes[eventId][voter].hasVoted;
     }
 }
