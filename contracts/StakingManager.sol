@@ -40,7 +40,11 @@ contract StakingManager is AccessControl, ReentrancyGuard {
 
     // Events
     event Staked(address indexed user, uint256 amount);
-    event UnstakeRequested(address indexed user, uint256 amount, uint256 unlockTime);
+    event UnstakeRequested(
+        address indexed user,
+        uint256 amount,
+        uint256 unlockTime
+    );
     event Unstaked(address indexed user, uint256 amount);
     event OracleStatusChanged(address indexed user, bool isOracle);
     event Slashed(address indexed user, uint256 amount, string reason);
@@ -67,21 +71,21 @@ contract StakingManager is AccessControl, ReentrancyGuard {
      */
     function stake(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
-        
+
         StakeInfo storage info = stakes[msg.sender];
-        
+
         // Check if user is mid-unstake - cancel it
         if (info.unstakeRequestedAt != 0) {
             info.unstakeRequestedAt = 0;
         }
 
         uint256 newTotal = info.amount + amount;
-        
+
         // Note: Since token is soulbound, we just record the stake
         // The token balance already represents their commitment
         info.amount = newTotal;
         info.stakedAt = block.timestamp;
-        
+
         totalStaked += amount;
 
         // Auto-grant oracle status if meets minimum
@@ -98,12 +102,12 @@ contract StakingManager is AccessControl, ReentrancyGuard {
      */
     function requestUnstake() external nonReentrant {
         StakeInfo storage info = stakes[msg.sender];
-        
+
         if (info.amount == 0) revert NoStakeFound();
         if (info.unstakeRequestedAt != 0) revert AlreadyUnstaking();
 
         info.unstakeRequestedAt = block.timestamp;
-        
+
         uint256 unlockTime = block.timestamp + unstakeCooldown;
         emit UnstakeRequested(msg.sender, info.amount, unlockTime);
     }
@@ -113,21 +117,21 @@ contract StakingManager is AccessControl, ReentrancyGuard {
      */
     function completeUnstake() external nonReentrant {
         StakeInfo storage info = stakes[msg.sender];
-        
+
         if (info.unstakeRequestedAt == 0) revert UnstakeNotRequested();
-        
+
         uint256 unlockTime = info.unstakeRequestedAt + unstakeCooldown;
         if (block.timestamp < unlockTime) {
             revert CooldownNotComplete(unlockTime, block.timestamp);
         }
 
         uint256 amount = info.amount;
-        
+
         // Reset stake info
         info.amount = 0;
         info.stakedAt = 0;
         info.unstakeRequestedAt = 0;
-        
+
         if (info.isOracle) {
             info.isOracle = false;
             emit OracleStatusChanged(msg.sender, false);
@@ -144,7 +148,7 @@ contract StakingManager is AccessControl, ReentrancyGuard {
     function cancelUnstake() external {
         StakeInfo storage info = stakes[msg.sender];
         if (info.unstakeRequestedAt == 0) revert UnstakeNotRequested();
-        
+
         info.unstakeRequestedAt = 0;
     }
 
@@ -160,7 +164,7 @@ contract StakingManager is AccessControl, ReentrancyGuard {
         string calldata reason
     ) external onlyRole(SLASHER_ROLE) {
         StakeInfo storage info = stakes[user];
-        
+
         if (info.amount < amount) {
             amount = info.amount; // Slash remaining
         }
@@ -225,7 +229,7 @@ contract StakingManager is AccessControl, ReentrancyGuard {
     function timeUntilUnstake(address user) external view returns (uint256) {
         StakeInfo storage info = stakes[user];
         if (info.unstakeRequestedAt == 0) return type(uint256).max;
-        
+
         uint256 unlockTime = info.unstakeRequestedAt + unstakeCooldown;
         if (block.timestamp >= unlockTime) return 0;
         return unlockTime - block.timestamp;
