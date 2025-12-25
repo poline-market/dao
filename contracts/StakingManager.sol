@@ -57,6 +57,7 @@ contract StakingManager is AccessControl, ReentrancyGuard {
     error CooldownNotComplete(uint256 unlockTime, uint256 currentTime);
     error AlreadyUnstaking();
     error NotOracle();
+    error InsufficientBalance(uint256 required, uint256 available);
     error ZeroAmount();
 
     constructor(address token, address admin) {
@@ -81,8 +82,13 @@ contract StakingManager is AccessControl, ReentrancyGuard {
 
         uint256 newTotal = info.amount + amount;
 
-        // Note: Since token is soulbound, we just record the stake
-        // The token balance already represents their commitment
+        // Verify user has sufficient token balance before staking
+        uint256 userBalance = polineToken.balanceOf(msg.sender);
+        if (userBalance < newTotal) {
+            revert InsufficientBalance(newTotal, userBalance);
+        }
+
+        // Record the stake - token remains in user's wallet (soulbound)
         info.amount = newTotal;
         info.stakedAt = block.timestamp;
 

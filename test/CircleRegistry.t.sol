@@ -4,8 +4,22 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "../contracts/CircleRegistry.sol";
 
+// Mock StakingManager for testing
+contract MockStakingManager {
+    mapping(address => uint256) public stakes;
+
+    function setStake(address user, uint256 amount) external {
+        stakes[user] = amount;
+    }
+
+    function getStake(address user) external view returns (uint256) {
+        return stakes[user];
+    }
+}
+
 contract CircleRegistryTest is Test {
     CircleRegistry public registry;
+    MockStakingManager public mockStaking;
     address public admin;
     address public member1;
     address public member2;
@@ -17,8 +31,10 @@ contract CircleRegistryTest is Test {
         member1 = makeAddr("member1");
         member2 = makeAddr("member2");
 
+        mockStaking = new MockStakingManager();
+
         vm.prank(admin);
-        registry = new CircleRegistry(admin);
+        registry = new CircleRegistry(admin, address(mockStaking));
     }
 
     function test_CreateCircle() public {

@@ -8,6 +8,8 @@ import "../contracts/StakingManager.sol";
 import "../contracts/OracleVoting.sol";
 import "../contracts/DisputeResolution.sol";
 import "../contracts/PolineDAO.sol";
+import "../contracts/PolinePurchase.sol";
+import "../contracts/TreasuryManager.sol";
 
 /**
  * @title Deploy
@@ -29,20 +31,24 @@ contract Deploy is Script {
         );
         console.log("PolineToken deployed at:", address(token));
 
-        // 2. Deploy Circle Registry
-        CircleRegistry circleRegistry = new CircleRegistry(deployer);
-        console.log("CircleRegistry deployed at:", address(circleRegistry));
-
-        // 3. Deploy Staking Manager
+        // 2. Deploy Staking Manager (before CircleRegistry, since it needs the reference)
         StakingManager stakingManager = new StakingManager(
             address(token),
             deployer
         );
         console.log("StakingManager deployed at:", address(stakingManager));
 
+        // 3. Deploy Circle Registry (with stakingManager reference for joinCircle feature)
+        CircleRegistry circleRegistry = new CircleRegistry(
+            deployer,
+            address(stakingManager)
+        );
+        console.log("CircleRegistry deployed at:", address(circleRegistry));
+
         // 4. Deploy Oracle Voting
         OracleVoting oracleVoting = new OracleVoting(
             address(stakingManager),
+            address(circleRegistry),
             deployer
         );
         console.log("OracleVoting deployed at:", address(oracleVoting));
@@ -116,14 +122,32 @@ contract Deploy is Script {
         );
         console.log("Community Circle created");
 
+        // 7. Deploy PolinePurchase (must be after DAO for treasury reference)
+        PolinePurchase purchase = new PolinePurchase(
+            address(token),
+            address(dao), // Treasury is the DAO
+            0.001 ether // Initial price: 0.001 POL per POLINE
+        );
+        console.log("PolinePurchase deployed at:", address(purchase));
+
+        // Grant MINTER_ROLE to PolinePurchase so it can mint tokens on purchase
+        token.grantRole(token.MINTER_ROLE(), address(purchase));
+        console.log("MINTER_ROLE granted to PolinePurchase");
+
+        // 8. Deploy TreasuryManager (DAO is the governance)
+        TreasuryManager treasury = new TreasuryManager(address(dao));
+        console.log("TreasuryManager deployed at:", address(treasury));
+
         vm.stopBroadcast();
 
         console.log("\n=== Deployment Summary ===");
         console.log("Token:", address(token));
-        console.log("CircleRegistry:", address(circleRegistry));
         console.log("StakingManager:", address(stakingManager));
+        console.log("CircleRegistry:", address(circleRegistry));
         console.log("OracleVoting:", address(oracleVoting));
         console.log("DisputeResolution:", address(disputeResolution));
         console.log("PolineDAO:", address(dao));
+        console.log("PolinePurchase:", address(purchase));
+        console.log("TreasuryManager:", address(treasury));
     }
 }
