@@ -10,6 +10,7 @@ import "../contracts/DisputeResolution.sol";
 import "../contracts/PolineDAO.sol";
 import "../contracts/PolinePurchase.sol";
 import "../contracts/TreasuryManager.sol";
+import "../contracts/UserProfile.sol";
 
 /**
  * @title Deploy
@@ -138,6 +139,10 @@ contract Deploy is Script {
         TreasuryManager treasury = new TreasuryManager(address(dao));
         console.log("TreasuryManager deployed at:", address(treasury));
 
+        // 9. Deploy UserProfile (standalone, no dependencies)
+        UserProfile userProfile = new UserProfile();
+        console.log("UserProfile deployed at:", address(userProfile));
+
         vm.stopBroadcast();
 
         console.log("\n=== Deployment Summary ===");
@@ -149,5 +154,6 @@ contract Deploy is Script {
         console.log("PolineDAO:", address(dao));
         console.log("PolinePurchase:", address(purchase));
         console.log("TreasuryManager:", address(treasury));
+        console.log("UserProfile:", address(userProfile));
     }
 }
